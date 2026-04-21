@@ -364,18 +364,21 @@ async function fetchQuotes(codes) {
  return _cache;
 }
 
-// 获取单只股票名称（用于弹窗自动识别）
+// 获取单只股票名称和实时价格（用于弹窗自动识别）
 async function fetchName(code) {
  const qtCode = toQtCode(code);
  if (!qtCode) return null;
+ const rawCode = String(code).replace(/^(sh|sz|bj)/i, '').toLowerCase();
+ // 多 key 缓存命中
  if (_cache[qtCode] && _cache[qtCode].name) return _cache[qtCode];
+ if (_cache[rawCode] && _cache[rawCode].name) return _cache[rawCode];
  try {
    const resp = await fetch(API_BASE + qtCode);
    if (!resp.ok) return null;
    const text = await resp.text();
    const info = parseQtLine(text);
    if (info && info.name) {
-     const rawCode = qtCode.replace(/^(sh|sz|bj)/i, '').toLowerCase();
+     // 用多种 key 缓存，refreshAll 用任意一种都能查到
      _cache[qtCode] = info; _cache[rawCode] = info;
      _cacheTime[qtCode] = Date.now(); _cacheTime[rawCode] = Date.now();
      return info;
@@ -631,23 +634,26 @@ function confirmAdd() {
  showToast(`已添加 ${_detectName||raw}，持仓 ${amount} 股 @ ¥${price}`,'green');
 }
 
-function quickAdd() {
+async function quickAdd() {
  const raw = document.getElementById('quickCode').value.trim().replace(/^(sh|sz|bj)/i,'');
- const price = parseFloat(document.getElementById('quickPrice').value);
  const amount = parseInt(document.getElementById('quickAmount').value);
  const tag = document.getElementById('quickTag').value;
  if (!raw || !/^\d{6}$/.test(raw)) return showToast('请输入6位股票代码','red');
- if (!price || price<=0) return showToast('请输入买入价','red');
+ // 先获取实时价格
+ const info = await fetchName(raw);
+ if (!info || !info.price) return showToast('无法获取行情，请稍后重试','red');
+ // 自动填入当前价格
+ document.getElementById('quickPrice').value = info.price.toFixed(2);
+ const price = info.price;
+ const cost = price * amount;
  if (!amount || amount<100) return showToast('最低持仓100股','red');
  const cash = parseFloat(document.getElementById('cash').textContent);
- if (price*amount > cash) return showToast(`资金不足！可用 ¥${cash.toFixed(2)}`,'red');
- fetchName(raw).then(info => {
-   holdings.push({ code:raw, name:(info&&info.name)||'', price, cost:price, amount, tag, lastPrice:price, _name:(info&&info.name)||'' });
-   document.getElementById('cash').textContent = (cash-price*amount).toFixed(2);
-   document.getElementById('quickCode').value=''; document.getElementById('quickPrice').value=''; document.getElementById('quickAmount').value='';
-   saveData(); refreshAll();
-   showToast(`快捷加仓 ${(info&&info.name)?info.name:raw}，${amount}股 @ ¥${price}`,'green');
- });
+ if (cost > cash) return showToast(`资金不足！可用 ¥${cash.toFixed(2)}，需 ¥${cost.toFixed(2)}`,'red');
+ holdings.push({ code:raw, name:info.name||raw, price, cost, amount, tag, lastPrice:price, _name:info.name||raw });
+ document.getElementById('cash').textContent = (cash-cost).toFixed(2);
+ document.getElementById('quickCode').value=''; document.getElementById('quickPrice').value=''; document.getElementById('quickAmount').value='';
+ saveData(); refreshAll();
+ showToast(`快捷加仓 ${info.name} ${amount}股 @ ¥${price}`,'green');
 }
 
 function removeHold(idx) {
